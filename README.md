@@ -1,158 +1,277 @@
 # Frontistirio — Test Cycles Brain
 
-> **Purpose:** Documents how test cycles and individual tests are created, managed, and used to evaluate students. Also covers how test result PDFs are generated.
+> **Full-stack reference** for test cycle and individual test management — creation, upsert logic, student resolution, PDF export, and the student home page integration. Covers backend and Angular frontend.
 
 ---
 
-## Overview
+## Backend: MongoDB Models
 
-**Test Cycles** are groupings of individual **Tests** (exam sessions). A test cycle might represent a term's examination period, grouping multiple tests across courses and grades.
-
-```
-TestCycle (e.g., "Winter Exams 2025")
-  ├── Test (Math, Grade A, 15 Jan 2026, 10:00–12:00)
-  ├── Test (English, Grade B, 16 Jan 2026, 10:00–12:00)
-  └── Test (Physics, Grade A, 17 Jan 2026, 14:00–16:00)
-```
-
----
-
-## Models
-
-### TestCycle (`models/testCycle.js`)
-
-```
-TestCycle {
-  description   String
-  store_id      → Store
-  period_id     → TeachingPeriod
-  grade_ids     → [Grade]          // which grades participate
-  course_ids    → [Course]         // which courses are tested
-  test_ids      → [Test]           // individual tests in this cycle
-  isDeleted     Boolean
-  deletedAt     Date
-  createdBy / updatedBy → User
+### `models/testCycle.js`
+```javascript
+{
+  description: String,
+  store_id: ObjectId → Store,
+  period_id: ObjectId → TeachingPeriod,
+  grade_ids: [ObjectId → Grade],       // which grades participate
+  course_ids: [ObjectId → Course],     // which courses are tested
+  test_ids: [ObjectId → Test],         // individual tests in this cycle
+  isDeleted: Boolean, deletedAt: Date,
+  createdBy/updatedBy: ObjectId → User,
+  timestamps: true
 }
 ```
 
-### Test (`models/test.js`)
-
-Individual exam session within a cycle:
-
-```
-Test {
-  store_id       → Store
-  test_cycle_id  → TestCycle
-  grade_ids      → [Grade]          // grades taking this test
-  course_ids     → [Course]         // courses being tested
-  student_ids    → [Student]        // specific students enrolled
-  period_id      → TeachingPeriod
-  date           Date (required)
-  start_time     String "HH:mm"
-  end_time       String "HH:mm"
-  isDeleted      Boolean
-  deletedAt      Date
-  createdBy / updatedBy → User
+### `models/test.js`
+```javascript
+{
+  store_id: ObjectId → Store,
+  test_cycle_id: ObjectId → TestCycle,
+  grade_ids: [ObjectId → Grade],
+  course_ids: [ObjectId → Course],
+  student_ids: [ObjectId → Student],    // explicitly set students for this test
+  period_id: ObjectId → TeachingPeriod,
+  date: Date (required),
+  start_time: String 'HH:mm' (required),
+  end_time: String 'HH:mm' (required),
+  isDeleted: Boolean, deletedAt: Date,
+  createdBy/updatedBy: ObjectId → User,
+  timestamps: true
 }
 ```
 
 ---
 
-## API Endpoints (`routes/tests.js`)
+## Backend: Routes (`routes/tests.js`)
 
-| Method | Path | Description |
-|---|---|---|
-| GET | `/test-cycles/` | Get all test cycles for current period |
-| POST | `/test-cycles/` | Create a test cycle |
-| PUT | `/test-cycles/:id` | Edit a test cycle |
-| DELETE | `/test-cycles/:id` | Delete a test cycle |
-| GET | `/test-cycles/:id/tests` | Get all tests in a cycle |
-| POST | `/test-cycles/:cycleId/tests` | Add a test to a cycle |
-| PUT | `/test-cycles/:cycleId/tests/:testId` | Edit a test |
-| DELETE | `/test-cycles/:cycleId/tests/:testId` | Delete a test |
-| GET | `/test-cycles/:id/pdf` | Generate & upload PDF summary |
+| Method | Path | Role | Controller |
+|---|---|---|---|
+| GET | `/test-cycles/get-store-test-cycles` | isStoreUser | `getStoreTestCycles` |
+| GET | `/test-cycles/get-store-test-cycle-tests` | isStoreUser | `getStoreTestCycleTests` |
+| POST | `/test-cycles/upsert-store-test-cycles` | isStoreUser | `upsertStoreTestCycles` |
+| POST | `/test-cycles/upsert-store-test-cycle-tests` | isStoreUser | `upsertStoreTestCycleTests` |
+| POST | `/test-cycles/delete-test-cycle-test` | isStoreUser | `deleteStoreTestCycleTest` |
+| POST | `/test-cycles/delete-store-test-cycle` | isStoreUser | `deleteStoreTestCycle` |
+| POST | `/test-cycles/export-store-test-cycle-report` | isStoreUser | `exportTestCycleReport` |
 
----
-
-## Test Cycle Creation Flow
-
-1. Validate store + period
-2. Call `testHandler.createStoreTestCycle(cycleData, store_id, periodId, user_id)`
-3. TestCycle created with `test_ids: []`
+Also on students route:
+| GET | `/students/get-store-student-test-cycle-tests` | **isStudent** | `getStoreStudentTestCycleTests` |
 
 ---
 
-## Adding Tests to a Cycle
+## Backend: Controller Logic
 
-```
-POST /test-cycles/:cycleId/tests
-Body: {
-  grade_ids, course_ids, student_ids,
-  date, start_time, end_time
+### `upsertStoreTestCycles` (Create or Edit TestCycle)
+```javascript
+// body: { description, grade_ids[], course_ids[], existing? }
+// Validation: description required, grade_ids and course_ids must be non-empty arrays
+
+if (existing_cycle) {
+  // UPDATE existing cycle
+  test_cycle = await testHandler.updateStoreTestCycle(
+    existing_cycle, store_id, periodId, description, grade_ids, course_ids, user_id, session
+  );
+} else {
+  // CREATE new cycle
+  test_cycle = await testHandler.createStoreTestCycle(...);
 }
 ```
 
-1. Create `Test` document linked to `test_cycle_id`
-2. Push `test._id` into `TestCycle.test_ids`
-3. Students can be explicitly listed or derived from `grade_ids` + `course_ids`
+### `upsertStoreTestCycleTests` (Add/Edit Tests in a Cycle)
+The frontend sends an array of tests — some may have `_id` (existing, to update) and some may not (new, to create):
+
+```javascript
+const existing_tests = tests.filter(t => t?._id);  // have _id → update
+const new_tests = tests.filter(t => !t?._id);       // no _id → create
+
+// Update existing tests:
+const updated_tests = await testHandler.updateStoreTestCycleTests(
+  existing_tests, store_id, periodId, user_id, session
+);
+
+// Create new tests:
+const newly_created_tests = await testHandler.createStoreTestCycleTests(
+  new_tests, store_id, periodId, user_id, session
+);
+
+// Add all test IDs to the cycle (using $addToSet to prevent duplicates):
+await TestCycle.findByIdAndUpdate(test_cycle_id, {
+  $addToSet: { test_ids: { $each: [...testIds] } }
+}, { session });
+```
+
+### `deleteStoreTestCycleTest`
+Soft-deletes the Test document and removes its `_id` from `TestCycle.test_ids`.
+
+### `deleteStoreTestCycle`
+Soft-deletes the TestCycle and all its associated Tests.
+
+### `getStoreTestCycles(storeId, periodId)` (handler)
+Returns test cycles filtered by `store_id` + `period_id`, with `isDeleted: false`.
+
+### `getStoreTestCycleTests(test_cycle_id)` (handler)
+Returns all non-deleted Test documents where `test_cycle_id` matches, with populated `grade_ids` and `course_ids`.
 
 ---
 
-## Student Resolution for Tests
+## Backend: PDF Export (`exportTestCycleReport`)
 
-When `student_ids` is not explicitly provided:
-1. Look up all students in the store for the active period
-2. Filter by `grade_ids` — students whose `period_grade` matches
-3. Filter by `course_ids` — students enrolled in those courses
-4. Resulting set = students assigned to this test
+1. Fetch the TestCycle document (populated with test_ids)
+2. Fetch all Test documents for the cycle
+3. For each test: fetch its grades, courses, students
+4. Call `createTestCyclePdf(cycle, tests)` → pdfkit buffer (DejaVu fonts)
+5. Upload to S3 (`logeion-educational-material` bucket, path: `test-cycle-reports/{group_id}/{store_id}/`)
+6. Return pre-signed URL (60s)
 
 ---
 
-## PDF Generation for Test Cycles
+## Backend: Student Test Cycle Integration
 
-**Endpoint:** `GET /test-cycles/:id/pdf`
+`getStoreStudentTestCycleTests(req, res)` (on students route, role: **isStudent**):
+- Uses `student_id` from query params
+- Finds all TestCycles for the store's current period
+- Filters Tests where `student_ids` includes this student
+- Returns upcoming tests (sorted by date)
 
-Flow:
-1. Fetch the `TestCycle` with all its `Test` documents populated
-2. Fetch student data for each test
-3. Call `createTestCyclePdf(cycle, tests)` (uses `pdfkit`)
-4. Upload PDF to **AWS S3**
-5. Return a **pre-signed S3 URL** (60s expiry)
+This is what populates the home page dashboard for a logged-in student.
 
-Helper: `helpers/createTestCyclePdf.js`
+---
 
-PDF content typically includes:
-- Cycle name/description
-- List of tests with dates, times, courses, grades
-- Student lists per test
+## Backend: Handler Exports
+
+```javascript
+exports.createStoreTestCycle(cycleData, store_id, periodId, user_id, session)
+exports.updateStoreTestCycle(cycleId, store_id, periodId, description, grade_ids, course_ids, user_id, session)
+exports.getStoreTestCycles(storeId, periodId)
+exports.getStoreTestCycle(testCycleId)             // single cycle
+exports.getStoreTestCycleTests(testCycleId)        // tests for a cycle
+exports.createStoreTestCycleTests(tests[], store_id, periodId, user_id, session)
+exports.updateStoreTestCycleTests(tests[], store_id, periodId, user_id, session)
+exports.deleteStoreTestCycleTest(testId, testCycleId, session)
+exports.watchTestCycles(io, userSockets)            // Change Stream
+```
+
+---
+
+## Frontend: TypeScript Models
+
+```typescript
+interface TestCycle {
+  _id?: string; description: string;
+  store_id?: string; period_id?: string;
+  grade_ids: string[]; course_ids: string[];
+  test_ids: string[];
+  isDeleted?: boolean;
+}
+
+interface Test {
+  _id?: string; test_cycle_id: string;
+  grade_ids: string[]; course_ids: string[];
+  student_ids: string[];
+  period_id?: string;
+  date: Date | string;
+  start_time: string;   // 'HH:mm'
+  end_time: string;     // 'HH:mm'
+  isDeleted?: boolean;
+}
+```
+
+---
+
+## Frontend: NgRx State
+
+```typescript
+// Slice: test_cycles
+interface TestCycleState { test_cycles: TestCycle[] }
+
+// Actions:
+setTestCycles({ test_cycles })              // bootstrap
+addTestCycle({ test_cycle })                // socket: testCycleAdded
+updatePeriodFields({ id, changes })         // socket: testCycleUpdated
+deleteTestCycle({ id })                     // socket: testCycleDeleted
+
+// Selector:
+selectTestCycles → Observable<TestCycle[]>
+```
+
+**Note:** Individual `Test` documents are **NOT in NgRx** — fetched on demand in `TestCycleDetailsComponent`. Only the `TestCycle` objects (with `test_ids` array) are in state.
+
+---
+
+## Frontend: Service (`services/test-cycle.service.ts`)
+
+```typescript
+getStoreTestCycles(student_ids, course_id)
+  → GET /test-cycles/get-store-test-cycles  (params unused server-side)
+  → returns { test_cycles: TestCycle[], success }
+
+getStoreTestCycleTests(test_cycle_id)
+  → GET /test-cycles/get-store-test-cycle-tests?test_cycle_id=xxx
+  → returns { tests: Test[], success }
+
+upsertStoreTestCycles(description, course_ids, grade_ids, existing?)
+  → POST /test-cycles/upsert-store-test-cycles
+  body: { description, course_ids, grade_ids, existing: existingCycleId | undefined }
+  → returns { success, test_cycle: TestCycle, message }
+
+createTestsForCycle(test_cycle_id, tests[])
+  → POST /test-cycles/upsert-store-test-cycle-tests
+  body: { test_cycle_id, tests }
+  → returns { success, test_cycle }
+
+removerTestFromCycle(test_cycle_id, test_id)
+  → POST /test-cycles/delete-test-cycle-test
+  body: { test_cycle_id, test_id }
+
+deleteTestCycle(test_cycle_id, permanently)
+  → POST /test-cycles/delete-store-test-cycle
+  body: { test_cycle_id, permanently }
+
+exportTestCycleReport(test_cycle_id)
+  → POST /test-cycles/export-store-test-cycle-report
+  body: { test_cycle_id }
+  → returns { success, downloadUrl, filename }
+```
+
+---
+
+## Frontend: Components
+
+### `TestCyclesComponent` (`/test-cycles`, role: store-user)
+Lists test cycles from NgRx `selectTestCycles`. Shows `TestCycleItemComponent` cards with cycle description, grade/course count.
+
+### `AddTestCycleComponent`
+Form: description + select grades (from NgRx `selectAllGrades`) + select courses (from NgRx `selectAllCourses`). Calls `upsertStoreTestCycles()`. Same component handles both create and edit (edit passes `existing` cycle ID).
+
+### `TestCycleDetailsComponent` (`/test-cycles/:id`) — 17KB TS + 8KB HTML
+Most complex test component:
+- On init: calls `getStoreTestCycleTests(cycleId)` to load individual tests
+- Add test form: date picker, start/end time, select courses and grades
+- Tests are sent as an array — new ones have no `_id`, existing ones have `_id`
+- Calls `createTestsForCycle(cycleId, tests)` which handles both create and update
+- Delete individual test: `removerTestFromCycle(cycleId, testId)`
+- Export PDF: `exportTestCycleReport(cycleId)` → `window.open(res.downloadUrl)`
+
+### `TestCycleItemComponent`
+Card view: shows cycle description, associated grades and courses, test count.
+
+---
+
+## Student Home Page Integration (`home.page.ts`)
+
+When role is `student`:
+```typescript
+// After finding student from NgRx:
+this.studentsService.getStoreStudentTestCycleTests(student._id)
+  .subscribe(resData => {
+    if (resData.success) this.upcomingTestCycles = resData.tests;
+  });
+```
+Displays upcoming tests in a schedule format on the dashboard.
 
 ---
 
 ## Real-Time Sync
 
-`watchTestCycles(io, userSockets)`:
-- MongoDB Change Stream on `TestCycle` collection
-- Pushes updates to connected store-users when test cycles are created or modified
-
----
-
-## Relationship to Grading
-
-Test cycles feed into the grading system:
-- Individual test scores → recorded against student/course
-- `GradeScenario` defines how test scores combine → `StudentCourseGrade`
-- The cycle itself doesn't store scores — scores are in `StudentCourseGrade`
-
----
-
-## Period Scoping
-
-All test cycles are scoped to a `TeachingPeriod`. When querying:
-```javascript
-const periodId = await getStoreDefaultPeriod(store_id);
-const cycles = await TestCycle.find({
-  store_id,
-  period_id: periodId,
-  isDeleted: false
-});
-```
+`watchTestCycles(io, userSockets)` — Change Stream on `TestCycle` collection:
+- Emits `testCycleAdded`, `testCycleUpdated`, `testCycleDeleted`
+- Individual `Test` changes are NOT watched — the details page re-fetches on load
