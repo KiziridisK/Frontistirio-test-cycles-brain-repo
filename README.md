@@ -33,11 +33,17 @@
   date: Date (required),
   start_time: String 'HH:mm' (required),
   end_time: String 'HH:mm' (required),
+  seating_plan: {                       // NEW (2026-06-28) — per-test seating
+    assignments: [{ classroom_id: ObjectId→ClassRoom, seat_id: String, student_id: ObjectId→Student }],
+    updatedAt: String,
+  },                                    // default null; seat_id == ClassRoom.layout SeatLayout.id
   isDeleted: Boolean, deletedAt: Date,
   createdBy/updatedBy: ObjectId → User,
   timestamps: true
 }
 ```
+> The seating feature (κάτοψη editor + drag-drop assignment + seating PDF) is documented in full in the
+> [classroom-seating brain](../Frontistirio-classroom-seating-brain-repo/README.md). Summary below.
 
 ---
 
@@ -52,6 +58,9 @@
 | POST | `/test-cycles/delete-test-cycle-test` | isStoreUser | `deleteStoreTestCycleTest` |
 | POST | `/test-cycles/delete-store-test-cycle` | isStoreUser | `deleteStoreTestCycle` |
 | POST | `/test-cycles/export-store-test-cycle-report` | isStoreUser | `exportTestCycleReport` |
+| POST | `/test-cycles/save-test-seating` | isStoreUser | `saveTestSeating` *(2026-06-28)* |
+| POST | `/test-cycles/export-store-test-participants` | isStoreUser | `exportTestParticipants` *(per-day, 2026-06-28)* |
+| POST | `/test-cycles/export-store-test-seating` | isStoreUser | `exportTestSeating` *(seating PDF, 2026-06-28)* |
 
 Also on students route:
 | GET | `/students/get-store-student-test-cycle-tests` | **isStudent** | `getStoreStudentTestCycleTests` |
@@ -230,6 +239,18 @@ exportTestCycleReport(test_cycle_id)
   → POST /test-cycles/export-store-test-cycle-report
   body: { test_cycle_id }
   → returns { success, downloadUrl, filename }
+
+// --- Seating (2026-06-28) ---
+saveTestSeating(test_id, assignments[])
+  → POST /test-cycles/save-test-seating
+  body: { test_id, assignments: [{ classroom_id, seat_id, student_id }] }
+  → returns { success, test, message }
+
+exportTestParticipants(test_id)        // per-day participants PDF (one test)
+  → POST /test-cycles/export-store-test-participants → { success, downloadUrl, filename }
+
+exportTestSeatingPlan(test_id)         // per-day seating-plan PDF (landscape)
+  → POST /test-cycles/export-store-test-seating → { success, downloadUrl, filename }
 ```
 
 ---
@@ -249,7 +270,11 @@ Most complex test component:
 - Tests are sent as an array — new ones have no `_id`, existing ones have `_id`
 - Calls `createTestsForCycle(cycleId, tests)` which handles both create and update
 - Delete individual test: `removerTestFromCycle(cycleId, testId)`
-- Export PDF: `exportTestCycleReport(cycleId)` → `window.open(res.downloadUrl)`
+- Export PDF: `exportTestCycleReport(cycleId)` → anchor download (global cycle report, next to breadcrumbs)
+- **Seating (2026-06-28):** each saved day has a **"Πλάνο"** button → opens `TestSeatingModalComponent`
+  (drag participants onto classroom seats, saved via `saveTestSeating`) and a two-role **"Εξαγωγή"**
+  button → `ActionSheetController` → seating-plan PDF or per-day participants PDF. Subscribes to
+  `selectClassRooms` for `classroomsWithLayout`. Full detail: [classroom-seating brain](../Frontistirio-classroom-seating-brain-repo/README.md).
 
 ### `TestCycleItemComponent`
 Card view: shows cycle description, associated grades and courses, test count.
