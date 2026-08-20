@@ -37,6 +37,8 @@
     assignments: [{ classroom_id: ObjectId→ClassRoom, seat_id: String, student_id: ObjectId→Student }],
     updatedAt: String,
   },                                    // default null; seat_id == ClassRoom.layout SeatLayout.id
+                                        // desks may be rect or circle (2026-07-23) — shape lives on
+                                        // ClassRoom.layout, not here; seating is unaffected
   isDeleted: Boolean, deletedAt: Date,
   createdBy/updatedBy: ObjectId → User,
   timestamps: true
@@ -275,6 +277,14 @@ Most complex test component:
   (drag participants onto classroom seats, saved via `saveTestSeating`) and a two-role **"Εξαγωγή"**
   button → `ActionSheetController` → seating-plan PDF or per-day participants PDF. Subscribes to
   `selectClassRooms` for `classroomsWithLayout`. Full detail: [classroom-seating brain](../Frontistirio-classroom-seating-brain-repo/README.md).
+- **Seating warnings (2026-07-23):** placing two students who sit **the same exam** at **the same
+  desk** is allowed but raises a warning toast and a standing entry in a panel under the participants
+  list. Derived state, so it self-clears and also flags plans saved earlier. Frontend-only — the
+  `save-test-seating` payload is unchanged.
+- **Header/footer buttons (2026-07-23):** `Add test day` / `Export report` were ~505px wide and `Save`
+  1054px (`expand="block"`), because of two global CSS rules. Now content-sized in the breadcrumb bar
+  with `Save` right-aligned in the footer; full-width again under 768px. Cause + the still-open global
+  fix: [classroom-seating brain](../Frontistirio-classroom-seating-brain-repo/README.md) §Gotcha.
 
 ### `TestCycleItemComponent`
 Card view: shows cycle description, associated grades and courses, test count.
@@ -292,6 +302,26 @@ this.studentsService.getStoreStudentTestCycleTests(student._id)
   });
 ```
 Displays upcoming tests in a schedule format on the dashboard.
+
+## Teacher Home Page Integration (added 2026-07-06)
+
+The teacher dashboard shows upcoming tests for the **courses they teach** (not a student's courses):
+```typescript
+// home.page.ts, when role is 'teacher':
+this.testCycleService.getTeacherTestCycleTests()
+  .subscribe(res => { if (res.success) this.upcomingTestCycles = res.tests; });
+```
+- Frontend: `TestCycleService.getTeacherTestCycleTests()` → `GET /test-cycles/get-teacher-test-cycle-tests`
+  (`routes/tests.js` mounts at `/test-cycles`; `authMiddleware, isTeacher`).
+- Controller `getStoreTeacherTestCycleTests` (`controllers/tests.js`): resolves the teacher by user id,
+  gets their `courseIds` for the default period (`teacherHandler.getTeacherPeriodAssignmentIds`), then
+  `testHandler.getStoreTeacherTests(courseIds, periodId, new Date(), default_period.date_to)`.
+- Handler `getStoreTeacherTests(courseIds, periodId, from, to)` — a clone of `getStoreStudentTests`
+  that matches tests whose `course_ids` intersect the teacher's `courseIds` (no student lookup),
+  grouped by test cycle, each test carrying the matched `course_id`. Same response shape as the
+  student endpoint, so the teacher home reuses the student "upcoming test cycles" card markup.
+
+See the **teacher-management** brain repo for the whole teacher portal.
 
 ---
 
