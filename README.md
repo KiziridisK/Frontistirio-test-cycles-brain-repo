@@ -1,6 +1,10 @@
 # Frontistirio — Test Cycles Brain
 
 > **Full-stack reference** for test cycle and individual test management — creation, upsert logic, student resolution, PDF export, and the student home page integration. Covers backend and Angular frontend.
+>
+> **See also (2026-09-21):** **grading** the tests of a cycle (`TestCourseGrade`, `/test-grades/:testId/:courseId`, approval flow) is in the
+> **grading-system** brain repo → «Test grading». The `/test-cycles/:id` UI redesign (`.tc-*`) and its state rules are in
+> **`Frontistirio-ui-conventions-brain-repo`** §8.
 
 ---
 
