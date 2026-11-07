@@ -141,7 +141,10 @@ Returns all non-deleted Test documents where `test_cycle_id` matches, with popul
 2. Fetch all Test documents for the cycle
 3. For each test: fetch its grades, courses, students
 4. Call `createTestCyclePdf(cycle, tests)` → pdfkit buffer (DejaVu fonts)
-5. Upload to S3 (`logeion-educational-material` bucket, path: `test-cycle-reports/{group_id}/{store_id}/`)
+5. Upload to S3 (**`logeion-test-cycle-reports`** bucket, path: `test-cycle-reports/{group_id}/{store_id}/`)
+   — *corrected 2026-11-07 (bugs TC-04): this line said `logeion-educational-material`. The code has always
+   used `logeion-test-cycle-reports`, the bucket exists, and all three test-cycle PDFs share it. The
+   `pdf-generation` repo already carried the right name.*
 6. Return pre-signed URL (60s)
 
 ---
